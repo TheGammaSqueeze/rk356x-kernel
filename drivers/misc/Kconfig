@@ -17,6 +17,15 @@ config SENSORS_LIS3LV02D
 	select INPUT_POLLDEV
 	default n
 
+config TIMED_OUTPUT
+	bool "Timed output class driver"
+	default y
+
+config TIMED_GPIO
+	bool "Android timed gpio driver"
+	depends on GENERIC_GPIO && TIMED_OUTPUT
+	default y
+
 config AD525X_DPOT
 	tristate "Analog Devices Digital Potentiometers"
 	depends on (I2C || SPI) && SYSFS

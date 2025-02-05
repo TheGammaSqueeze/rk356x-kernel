@@ -24,7 +24,7 @@
 #include <linux/of_platform.h>
 #include <linux/wakelock.h>
 #include <linux/workqueue.h>
-#include "timed_output.h"
+#include <linux/timed_output.h>
 
 #define MAX_TIMEOUT        10000	/* 10s */
 
