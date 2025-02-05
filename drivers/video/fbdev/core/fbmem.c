@@ -362,6 +362,9 @@ static struct logo_data {
 	const struct linux_logo *logo;
 } fb_logo __read_mostly;
 
+/* --- Added for centering the logo vertically --- */
+static int fb_logo_total_height;
+
 static void fb_rotate_logo_ud(const u8 *in, u8 *out, u32 width, u32 height)
 {
 	u32 size = width * height, i;
@@ -432,33 +435,30 @@ static void fb_do_show_logo(struct fb_info *info, struct fb_image *image,
 		return;
 
 	if (rotate == FB_ROTATE_UR) {
-		for (x = 0;
-		     x < num && image->dx + image->width <= info->var.xres;
-		     x++) {
+		for (x = 0; x < num && image->dx + image->width <= info->var.xres; x++) {
 			info->fbops->fb_imageblit(info, image);
 			image->dx += image->width + 8;
 		}
 	} else if (rotate == FB_ROTATE_UD) {
 		u32 dx = image->dx;
-
 		for (x = 0; x < num && image->dx <= dx; x++) {
 			info->fbops->fb_imageblit(info, image);
 			image->dx -= image->width + 8;
 		}
 	} else if (rotate == FB_ROTATE_CW) {
-		for (x = 0;
-		     x < num && image->dy + image->height <= info->var.yres;
-		     x++) {
+		for (x = 0; x < num && image->dy + image->height <= info->var.yres; x++) {
 			info->fbops->fb_imageblit(info, image);
 			image->dy += image->height + 8;
 		}
 	} else if (rotate == FB_ROTATE_CCW) {
 		u32 dy = image->dy;
-
 		for (x = 0; x < num && image->dy <= dy; x++) {
 			info->fbops->fb_imageblit(info, image);
 			image->dy -= image->height + 8;
 		}
+	} else {
+		/* No rotation: simply blit the image once. */
+		info->fbops->fb_imageblit(info, image);
 	}
 }
 
@@ -509,7 +509,8 @@ static int fb_show_logo_line(struct fb_info *info, int rotate,
 		fb_set_logo(info, logo, logo_new, fb_logo.depth);
 	}
 
-	image.dx = 0;
+	/* --- Center the logo horizontally --- */
+	image.dx = (info->var.xres - logo->width) / 2;
 	image.dy = y;
 	image.width = logo->width;
 	image.height = logo->height;
@@ -666,7 +667,6 @@ int fb_prepare_logo(struct fb_info *info, int rotate)
 	else
 		fb_logo.depth = 1;
 
-
  	if (fb_logo.depth > 4 && depth > 4) {
  		switch (info->fix.visual) {
  		case FB_VISUAL_TRUECOLOR:
@@ -682,26 +682,53 @@ int fb_prepare_logo(struct fb_info *info, int rotate)
  		}
  	}
 
-	return fb_prepare_extra_logos(info, fb_logo.logo->height, yres);
+	/* --- For a single logo display, do not use extra logos ---
+	 * Set the total logo block height equal to the logo’s height.
+	 */
+	fb_logo_total_height = fb_logo.logo->height;
+#ifdef CONFIG_FB_LOGO_EXTRA
+	fb_logo_ex_num = 0;
+#endif
+	return fb_logo_total_height;
 }
 
+/*
+ * --- MODIFICATION: Clear the entire framebuffer to black first ---
+ * and then draw the centered logo so that if the logo is smaller than the display,
+ * a full black border appears.
+ */
 int fb_show_logo(struct fb_info *info, int rotate)
 {
-	int y;
+	int offset_y;  /* Moved declaration to top for C90 compliance */
 
-	y = fb_show_logo_line(info, rotate, fb_logo.logo, 0,
-			      num_online_cpus());
-	y = fb_show_extra_logos(info, y, rotate);
+	/* Clear the entire display to black */
+	if (info->fbops->fb_fillrect) {
+		struct fb_fillrect rect;
+		rect.dx = 0;
+		rect.dy = 0;
+		rect.width = info->var.xres;
+		rect.height = info->var.yres;
+		rect.color = 0;      /* Black color */
+		rect.rop = ROP_COPY; /* Use copy mode */
+		info->fbops->fb_fillrect(info, &rect);
+	} else if (info->screen_base) {
+		memset(info->screen_base, 0, info->fix.smem_len);
+	}
 
-	return y;
+	/* Compute the vertical offset to center the logo */
+	offset_y = (info->var.yres - fb_logo_total_height) / 2;
+	/* Display the logo once (n = 1) */
+	return fb_show_logo_line(info, rotate, fb_logo.logo, offset_y, 1);
 }
+EXPORT_SYMBOL(fb_show_logo);
+EXPORT_SYMBOL(fb_find_logo);
+EXPORT_SYMBOL(fb_find_hdmi_logo);
+
 #else
 int fb_prepare_logo(struct fb_info *info, int rotate) { return 0; }
 int fb_show_logo(struct fb_info *info, int rotate) { return 0; }
 #endif /* CONFIG_LOGO */
-EXPORT_SYMBOL(fb_prepare_logo);
-EXPORT_SYMBOL(fb_show_logo);
-
+ 
 static void *fb_seq_start(struct seq_file *m, loff_t *pos)
 {
 	mutex_lock(&registration_lock);
@@ -892,8 +919,7 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 	return (cnt) ? cnt : err;
 }
 
-int
-fb_pan_display(struct fb_info *info, struct fb_var_screeninfo *var)
+int fb_pan_display(struct fb_info *info, struct fb_var_screeninfo *var)
 {
 	struct fb_fix_screeninfo *fix = &info->fix;
 	unsigned int yres = info->var.yres;
@@ -953,8 +979,7 @@ static int fb_check_caps(struct fb_info *info, struct fb_var_screeninfo *var,
 	return err;
 }
 
-int
-fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
+int fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 {
 	int flags = info->flags;
 	int ret = 0;
@@ -1064,8 +1089,7 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 }
 EXPORT_SYMBOL(fb_set_var);
 
-int
-fb_blank(struct fb_info *info, int blank)
+int fb_blank(struct fb_info *info, int blank)
 {	
 	struct fb_event event;
 	int ret = -EINVAL, early_ret;
@@ -2032,3 +2056,4 @@ int fb_new_modelist(struct fb_info *info)
 }
 
 MODULE_LICENSE("GPL");
+
